@@ -85,12 +85,13 @@ public sealed class ITextPdfMergeService : IPdfMergeService
         var font = BuildFont(options.CustomFontPath);
         var totalPages = pdfDoc.GetNumberOfPages();
 
+        using var document = new Document(pdfDoc); // create once
+
         for (var i = 1; i <= totalPages; i++)
         {
             var page = pdfDoc.GetPage(i);
             var pageSize = page.GetPageSize();
             var canvas = new PdfCanvas(page.NewContentStreamAfter(), page.GetResources(), pdfDoc);
-            using var document = new Document(pdfDoc);
 
             if (!string.IsNullOrWhiteSpace(options.WatermarkText))
             {
