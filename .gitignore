@@ -1,0 +1,9 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/PdfComposer.Api/bin/Debug/net9.0
+/PdfComposer.Api/obj
+/.vs/PdfComposer
+*.user
+*.toml

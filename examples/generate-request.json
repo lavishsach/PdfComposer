@@ -1,0 +1,19 @@
+{
+  "templateHtml": "<div class='invoice'><h1>Invoice #@Model.invoiceNumber</h1><p>Customer: @Model.customer.name</p><p>Total: @Model.total</p></div>",
+  "templateCss": ".invoice { font-family: 'DejaVu Sans', sans-serif; } h1 { color: #1c4e80; }",
+  "data": {
+    "invoiceNumber": "INV-2026-001",
+    "total": 1250.75,
+    "customer": {
+      "name": "Acme Corp"
+    }
+  },
+  "renderOptions": {
+    "paperSize": "A4",
+    "orientation": "Portrait",
+    "includeHeader": true,
+    "headerText": "Invoice Document",
+    "includeFooter": true,
+    "footerText": "Confidential"
+  }
+}
