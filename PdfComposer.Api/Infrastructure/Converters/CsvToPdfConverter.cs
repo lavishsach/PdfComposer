@@ -1,5 +1,5 @@
-using CsvHelper;
 using ClosedXML.Excel;
+using CsvHelper;
 using Microsoft.Extensions.Options;
 using PdfComposer.Api.Application.Interfaces;
 using PdfComposer.Api.Application.Models;
@@ -14,12 +14,6 @@ public sealed class CsvToPdfConverter(
     IOptions<PdfComposerOptions> options,
     ILogger<CsvToPdfConverter> logger) : IFileToPdfConverter
 {
-    private static readonly string[] CommonWindowsSofficePaths =
-    [
-        @"C:\Program Files\LibreOffice\program\soffice.exe",
-        @"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
-    ];
-
     private readonly PdfComposerOptions _options = options.Value;
     private readonly ILogger<CsvToPdfConverter> _logger = logger;
 
@@ -42,14 +36,7 @@ public sealed class CsvToPdfConverter(
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(_options.DocToPdfTimeoutSeconds));
 
-            if (_options.UseDockerForLibreOffice)
-            {
-                await ConvertViaDockerAsync(sourcePath, outputPath, timeoutCts.Token);
-            }
-            else
-            {
-                await ConvertViaHostBinaryAsync(sourcePath, workingDir, timeoutCts.Token);
-            }
+            await ConvertViaDockerAsync(sourcePath, outputPath, timeoutCts.Token);
 
             if (!File.Exists(outputPath))
             {
@@ -85,16 +72,6 @@ public sealed class CsvToPdfConverter(
                 Directory.Delete(workingDir, recursive: true);
             }
         }
-    }
-
-    private async Task ConvertViaHostBinaryAsync(string sourcePath, string workingDir, CancellationToken cancellationToken)
-    {
-        var sofficeExecutable = ResolveSofficeExecutable();
-        var args = $"--headless --convert-to pdf --outdir \"{workingDir}\" \"{sourcePath}\"";
-
-        EnsureSuccess(
-            await RunProcessAsync(sofficeExecutable, args, cancellationToken),
-            "host LibreOffice conversion");
     }
 
     private async Task ConvertViaDockerAsync(string sourcePath, string outputPath, CancellationToken cancellationToken)
@@ -237,7 +214,6 @@ public sealed class CsvToPdfConverter(
             return;
         }
 
-        // Keep only columns that contain data in at least one row.
         var usedColumns = new bool[detectedMaxCols];
         foreach (var rowValues in parsedRows)
         {
@@ -314,9 +290,6 @@ public sealed class CsvToPdfConverter(
         headerRange.Style.Alignment.WrapText = false;
         headerRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
 
-        // Width strategy:
-        // - If table comfortably fits page width: keep single-line cells (no wrap).
-        // - If table is too wide: proportionally shrink columns and allow wrapping for text cells.
         var preferredWidths = new double[maxCols];
         for (var c = 1; c <= maxCols; c++)
         {
@@ -330,7 +303,6 @@ public sealed class CsvToPdfConverter(
                 }
             }
 
-            // Character-based width estimate with padding.
             preferredWidths[c - 1] = Math.Clamp(maxLen + 2d, 8d, 40d);
         }
 
@@ -344,8 +316,6 @@ public sealed class CsvToPdfConverter(
             {
                 sheet.Column(c).Width = preferredWidths[c - 1];
             }
-            dataRange.Style.Alignment.WrapText = false;
-            headerRange.Style.Alignment.WrapText = false;
         }
         else
         {
@@ -356,7 +326,6 @@ public sealed class CsvToPdfConverter(
                 sheet.Column(c).Width = Math.Clamp(scaled, 6.5d, 22d);
             }
 
-            // Allow wrap only when needed due to width constraints.
             dataRange.Style.Alignment.WrapText = true;
             headerRange.Style.Alignment.WrapText = true;
         }
@@ -413,99 +382,15 @@ public sealed class CsvToPdfConverter(
             throw new InvalidOperationException("PdfComposer:DocToPdfTimeoutSeconds must be greater than zero.");
         }
 
-        if (string.IsNullOrWhiteSpace(_options.LibreOfficeBinaryPath))
+        if (string.IsNullOrWhiteSpace(_options.LibreOfficeDockerExecutable))
         {
-            throw new InvalidOperationException("PdfComposer:LibreOfficeBinaryPath is not configured.");
+            throw new InvalidOperationException("PdfComposer:LibreOfficeDockerExecutable is not configured.");
         }
 
-        if (_options.UseDockerForLibreOffice)
+        if (string.IsNullOrWhiteSpace(_options.LibreOfficeContainerName))
         {
-            if (string.IsNullOrWhiteSpace(_options.LibreOfficeDockerExecutable))
-            {
-                throw new InvalidOperationException("PdfComposer:LibreOfficeDockerExecutable is not configured.");
-            }
-
-            if (string.IsNullOrWhiteSpace(_options.LibreOfficeContainerName))
-            {
-                throw new InvalidOperationException("PdfComposer:LibreOfficeContainerName is not configured.");
-            }
+            throw new InvalidOperationException("PdfComposer:LibreOfficeContainerName is not configured.");
         }
-    }
-
-    private string ResolveSofficeExecutable()
-    {
-        var configured = _options.LibreOfficeBinaryPath.Trim();
-
-        if (LooksLikePath(configured))
-        {
-            if (File.Exists(configured))
-            {
-                return configured;
-            }
-
-            throw new FileNotFoundException(
-                "Configured LibreOffice binary was not found. Set PdfComposer:LibreOfficeBinaryPath to a valid soffice executable path.",
-                configured);
-        }
-
-        var fromPath = ResolveExecutableFromPath(configured);
-        if (fromPath is not null)
-        {
-            return fromPath;
-        }
-
-        foreach (var candidate in CommonWindowsSofficePaths)
-        {
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new FileNotFoundException(
-            $"LibreOffice executable '{configured}' was not found in PATH or common install locations. " +
-            "Install LibreOffice or set PdfComposer:LibreOfficeBinaryPath to the full soffice.exe path.");
-    }
-
-    private static bool LooksLikePath(string value)
-        => value.Contains(Path.DirectorySeparatorChar) || value.Contains(Path.AltDirectorySeparatorChar);
-
-    private static string? ResolveExecutableFromPath(string executableName)
-    {
-        var pathValue = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(pathValue))
-        {
-            return null;
-        }
-
-        var pathext = Environment.GetEnvironmentVariable("PATHEXT")?
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            ?? [".exe", ".cmd", ".bat"];
-
-        foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var directCandidate = Path.Combine(directory, executableName);
-            if (File.Exists(directCandidate))
-            {
-                return directCandidate;
-            }
-
-            if (Path.HasExtension(executableName))
-            {
-                continue;
-            }
-
-            foreach (var ext in pathext)
-            {
-                var candidate = Path.Combine(directory, executableName + ext);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        return null;
     }
 
     private static string Truncate(string value)
