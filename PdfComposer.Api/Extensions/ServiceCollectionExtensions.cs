@@ -10,8 +10,10 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddPdfComposer(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<PdfComposerOptions>(configuration.GetSection("PdfComposer"));
+        services.Configure<BlobStorageOptions>(configuration.GetSection("BlobStorage"));
 
         services.AddScoped<IPdfComposerService, PdfComposerService>();
+        services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
         services.AddSingleton<IHtmlTemplateEngine, RazorHtmlTemplateEngine>();
         services.AddSingleton<IHtmlToPdfConverter, DinkToPdfHtmlConverter>();
         services.AddSingleton<IPdfMergeService, ITextPdfMergeService>();

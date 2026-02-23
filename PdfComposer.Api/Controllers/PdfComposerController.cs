@@ -9,10 +9,12 @@ namespace PdfComposer.Api.Controllers;
 [Route("")]
 public sealed class PdfComposerController(
     IPdfComposerService pdfComposerService,
+    IBlobStorageService blobStorageService,
     IFileTypeResolver fileTypeResolver,
     ILogger<PdfComposerController> logger) : ControllerBase
 {
     private readonly IPdfComposerService _pdfComposerService = pdfComposerService;
+    private readonly IBlobStorageService _blobStorageService = blobStorageService;
     private readonly IFileTypeResolver _fileTypeResolver = fileTypeResolver;
     private readonly ILogger<PdfComposerController> _logger = logger;
 
@@ -35,6 +37,27 @@ public sealed class PdfComposerController(
         return File(outputStream, "application/pdf", $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}.pdf");
     }
 
+    [HttpPost("generate/blob")]
+    [Consumes("application/json")]
+    public async Task<ActionResult<BlobUploadResponse>> GenerateToBlobAsync([FromBody] GeneratePdfRequest request, CancellationToken cancellationToken)
+    {
+        await using var outputStream = await _pdfComposerService.GenerateFromTemplateAsync(
+            request.TemplateHtml,
+            request.Data,
+            request.TemplateCss,
+            request.RenderOptions,
+            cancellationToken);
+
+        var blobName = $"generated/{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}.pdf";
+        var uri = await _blobStorageService.UploadPdfAsync(outputStream, blobName, cancellationToken);
+
+        return Ok(new BlobUploadResponse
+        {
+            BlobName = blobName,
+            BlobUri = uri
+        });
+    }
+
     [HttpPost("compose")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> ComposeAsync(
@@ -42,16 +65,49 @@ public sealed class PdfComposerController(
         [FromForm] List<IFormFile> files,
         CancellationToken cancellationToken)
     {
+        await using var buildContext = BuildComposeContext(metadata, files);
+        var outputStream = await _pdfComposerService.ComposeFinalPdfAsync(buildContext.Request, cancellationToken);
+        if (outputStream.CanSeek)
+        {
+            outputStream.Position = 0;
+        }
+
+        _logger.LogInformation("Compose request processed. Attachments: {Count}", buildContext.AttachmentCount);
+        return File(outputStream, "application/pdf", $"composed-{DateTime.UtcNow:yyyyMMddHHmmss}.pdf");
+    }
+
+    [HttpPost("compose/blob")]
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<BlobUploadResponse>> ComposeToBlobAsync(
+        [FromForm] string metadata,
+        [FromForm] List<IFormFile> files,
+        CancellationToken cancellationToken)
+    {
+        await using var buildContext = BuildComposeContext(metadata, files);
+        await using var outputStream = await _pdfComposerService.ComposeFinalPdfAsync(buildContext.Request, cancellationToken);
+
+        var blobName = $"composed/{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}.pdf";
+        var uri = await _blobStorageService.UploadPdfAsync(outputStream, blobName, cancellationToken);
+
+        _logger.LogInformation("Compose-to-blob request processed. Attachments: {Count}", buildContext.AttachmentCount);
+        return Ok(new BlobUploadResponse
+        {
+            BlobName = blobName,
+            BlobUri = uri
+        });
+    }
+
+    private ComposeBuildContext BuildComposeContext(string metadata, List<IFormFile> files)
+    {
         var meta = JsonSerializer.Deserialize<ComposeMetadataRequest>(metadata, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
         }) ?? throw new InvalidOperationException("Invalid compose metadata payload.");
 
         var openedStreams = new List<Stream>();
-        var attachments = new List<ComposeAttachment>();
-
         try
         {
+            var attachments = new List<ComposeAttachment>();
             foreach (var attachmentSpec in meta.Attachments)
             {
                 var file = files.FirstOrDefault(f =>
@@ -89,22 +145,30 @@ public sealed class PdfComposerController(
                 PostProcessOptions = meta.PostProcessOptions
             };
 
-            var outputStream = await _pdfComposerService.ComposeFinalPdfAsync(composeRequest, cancellationToken);
-            if (outputStream.CanSeek)
+            return new ComposeBuildContext(composeRequest, openedStreams, attachments.Count);
+        }
+        catch
+        {
+            foreach (var stream in openedStreams)
             {
-                outputStream.Position = 0;
+                stream.Dispose();
             }
 
-            return File(outputStream, "application/pdf", $"composed-{DateTime.UtcNow:yyyyMMddHHmmss}.pdf");
+            throw;
         }
-        finally
+    }
+
+    private sealed class ComposeBuildContext(ComposeFinalPdfRequest request, List<Stream> openedStreams, int attachmentCount) : IAsyncDisposable
+    {
+        public ComposeFinalPdfRequest Request { get; } = request;
+        public int AttachmentCount { get; } = attachmentCount;
+
+        public async ValueTask DisposeAsync()
         {
             foreach (var stream in openedStreams)
             {
                 await stream.DisposeAsync();
             }
-
-            _logger.LogInformation("Compose request processed. Attachments: {Count}", attachments.Count);
         }
     }
 }
