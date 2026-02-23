@@ -44,13 +44,29 @@ public sealed class ImageToPdfConverter : IFileToPdfConverter
         using (var writer = new PdfWriter(outputPath))
         using (var pdf = new PdfDocument(writer))
         {
-            var pageSize = new iText.Kernel.Geom.PageSize(width, height);
+            // Use A4 as a standard page size. Rotate for landscape images.
+            var standardPage = iText.Kernel.Geom.PageSize.A4;
+            var pageSize = (width > height) ? standardPage.Rotate() : standardPage;
             pdf.SetDefaultPageSize(pageSize);
 
+            // Document with zero margins to use full page
             using var document = new Document(pdf);
+            document.SetMargins(0, 0, 0, 0);
+
             var pdfImage = new iText.Layout.Element.Image(ImageDataFactory.Create(imagePath));
-            pdfImage.ScaleToFit(width, height);
-            document.Add(pdfImage);
+
+            // Scale the image to fit within the page (preserve aspect ratio)
+            pdfImage.ScaleToFit(pageSize.GetWidth(), pageSize.GetHeight());
+
+            // Center horizontally and vertically using fixed position
+            var scaledWidth = pdfImage.GetImageScaledWidth();
+            var scaledHeight = pdfImage.GetImageScaledHeight();
+            var x = (pageSize.GetWidth() - scaledWidth) / 2;
+            var y = (pageSize.GetHeight() - scaledHeight) / 2;
+
+            document.Add(pdfImage.SetFixedPosition(1, x, y));
+
+            document.Close();
         }
 
         File.Delete(imagePath);

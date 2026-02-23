@@ -2,9 +2,11 @@ using iText.IO.Font;
 using iText.IO.Font.Constants;
 using iText.Kernel.Colors;
 using iText.Kernel.Font;
+using iText.Kernel.Geom;
 using iText.Kernel.Pdf;
 using iText.Kernel.Pdf.Canvas;
 using iText.Kernel.Pdf.Extgstate;
+using iText.Kernel.Pdf.Xobject;
 using iText.Layout;
 using iText.Layout.Element;
 using iText.Layout.Properties;
@@ -54,6 +56,7 @@ public sealed class ITextPdfMergeService : IPdfMergeService
     {
         using var writer = new PdfWriter(outputPath);
         using var destination = new PdfDocument(writer);
+        Rectangle? targetPageSize = null;
 
         foreach (var stream in pdfStreams)
         {
@@ -64,8 +67,33 @@ public sealed class ITextPdfMergeService : IPdfMergeService
 
             using var reader = new PdfReader(stream);
             using var source = new PdfDocument(reader);
-            source.CopyPagesTo(1, source.GetNumberOfPages(), destination);
+
+            for (var pageNo = 1; pageNo <= source.GetNumberOfPages(); pageNo++)
+            {
+                var sourcePage = source.GetPage(pageNo);
+                var sourceSize = sourcePage.GetPageSize();
+                targetPageSize ??= new Rectangle(sourceSize.GetWidth(), sourceSize.GetHeight());
+
+                var destinationPage = destination.AddNewPage(new PageSize(targetPageSize));
+                var xObject = sourcePage.CopyAsFormXObject(destination);
+                DrawScaledAndCentered(destinationPage, xObject, sourceSize, targetPageSize);
+            }
         }
+    }
+
+    private static void DrawScaledAndCentered(PdfPage destinationPage, PdfFormXObject sourceXObject, Rectangle sourceSize, Rectangle targetSize)
+    {
+        var scaleX = targetSize.GetWidth() / sourceSize.GetWidth();
+        var scaleY = targetSize.GetHeight() / sourceSize.GetHeight();
+        var scale = Math.Min(scaleX, scaleY);
+
+        var drawWidth = sourceSize.GetWidth() * scale;
+        var drawHeight = sourceSize.GetHeight() * scale;
+        var offsetX = (targetSize.GetWidth() - drawWidth) / 2f;
+        var offsetY = (targetSize.GetHeight() - drawHeight) / 2f;
+
+        var canvas = new PdfCanvas(destinationPage);
+        canvas.AddXObjectWithTransformationMatrix(sourceXObject, scale, 0, 0, scale, offsetX, offsetY);
     }
 
     private static bool RequiresPostProcessing(PdfPostProcessOptions options)
